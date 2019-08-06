@@ -12,7 +12,7 @@ import config
 
 class profile_dicts(object):
     def __init__(self, sources, ctxt_user, access_key, access_secret,
-                    consumer_key, consumer_secret, max_tweets=100,
+                    consumer_key, consumer_secret, max_tweets=100, max_imdb=5,
                                                             n_topics=5):
         self.apis = {
             'twitter': Twitter(auth = OAuth(access_key,
@@ -30,6 +30,7 @@ class profile_dicts(object):
                                             learning_offset=50.,
                                             random_state=0)
         self.max_tweets = max_tweets
+        self.max_imdb = max_imdb
         self.sources = sources
         #self.vectorizer = TfidfVectorizer()
 
@@ -58,21 +59,31 @@ class profile_dicts(object):
                         for i in topic.argsort()[:-no_top_words - 1:-1]]))
 
     def _fit_imdb(self, interest):
-        srs = self.imdb.search_movie(interest)[0]
+        srs = self.imdb.search_movie(interest)
+        srs = srs[:min(self.max_imdb, len(srs))]
         # If the current interest movie has no synopsis
         # then continue to the next.
-        mid = srs.movieID
-        movie = self.imdb.get_movie(mid)
-        try:
-            self.synopses[interest]['synopsis'] = movie['synopsis']
-        except KeyError:
-            self.synopses[interest]['synopsis'] = None
+        mids = [sr.movieID for sr in srs]
 
-        self.synopses[interest]['imdb_id'] = mid
-        try:
-            self.synopses[interest]['keywords'] = movie['keywords']
-        except KeyError:
-            self.synopses[interest]['keywords'] = None
+        for i in mids:
+            movie = self.imdb.get_movie(i)
+            try:
+                synopsis = movie['synopsis'][0]
+            except KeyError:
+                try:
+                    synopsis = movie['plot'][0]
+                except KeyError:
+                    try:
+                        synopsis = movie['plot outline'][0]
+                    except KeyError:
+                        synopsis = movie['long imdb title']
+
+            self.synopses[interest]['synopses'].append(synopsis)
+            self.synopses[interest]['imdb_ids'].append(i)
+            try:
+                self.synopses[interest]['titles'].append(movie['title'])
+            except KeyError:
+                self.synopses[interest]['titles'].append(None)
 
         return self
 
@@ -91,15 +102,13 @@ class profile_dicts(object):
             if txt in ['', None]:
                 continue
 
-            self.tweets[interest]["text"].append(txt)
-            if t == self.max_tweets:
-                break
+            self.tweets[interest]["texts"].append(txt)
+            self.tweets[interest]["screen_names"].append(
+                                                    srs["user"]["screen_name"])
+            self.tweets[interest]["user_ids"].append(srs["user"])
 
-        if self.tweets[interest]["text"] == []:
-            self.tweets[interest]["text"] = None
-
-        self.tweets[interest]["screen_name"] = srs["user"]["screen_name"]
-        self.tweets[interest]["user_id"] = srs["user"]
+        if self.tweets[interest]["texts"] == []:
+           self.tweets[interest]["texts"] = None
 
         return self
 
@@ -107,9 +116,9 @@ class profile_dicts(object):
         self.imdb = self.apis['imdb']
         self.twitter = self.apis['twitter']
 
-        self.synopses = {i: {'synopsis': '', 'imdb_id': 0, 'keywords': []}
+        self.synopses = {i:{'synopses': [], 'imdb_ids': [], 'titles': []}
                                                             for i in interests}
-        self.tweets = {i: {'text': [], 'user_id': 0, 'screen_name': ''}
+        self.tweets = {i: {'texts': [], 'user_ids': [], 'screen_names': []}
                                                             for i in interests}
         self.models = {i: {'model': None, 'f_names': []} for i in interests}
         # Information retrival and model fitting for each user's interest using
@@ -118,7 +127,8 @@ class profile_dicts(object):
         for i in interests:
             self._fit_imdb(i)
             self._fit_twitter(i)
-            self.documents = self.tweets[i]['text'] + self.synopses[i]['synopsis']
+            self.documents = self.tweets[i]['texts'] \
+                                + self.synopses[i]['synopses']
             if self.documents == []:
                 self.unavailable.append(i)
                 continue
