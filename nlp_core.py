@@ -1,9 +1,10 @@
-from twitter import *
+#from twitter import *
+import twitter
 from imdb import IMDb
 
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.decomposition import LatentDirichletAllocation
+from sklearn.decomposition import TruncatedSVD
 
 import sys
 sys.path.append(".")
@@ -11,27 +12,29 @@ import config
 
 
 class profile_dicts(object):
-    def __init__(self, sources, ctxt_user, access_key, access_secret,
-                    consumer_key, consumer_secret, max_tweets=100, max_imdb=5,
+    def __init__(self, sources, ctxt_user, access_token, access_secret,
+                    consumer_token, consumer_secret, max_tweets=100, max_imdb=5,
                                                             n_topics=5):
         self.apis = {
-            'twitter': Twitter(auth = OAuth(access_key,
-                        access_secret,
-                        consumer_key,
-                        consumer_secret)),
+            'twitter': twitter.Api(consumer_key=[consumer_token],
+                  consumer_secret=[consumer_secret],
+                  access_token_key=[access_token],
+                  access_token_secret=[access_secret]),
+            #'twitter': Twitter(auth = OAuth(access_key,
+            #            access_secret,
+            #            consumer_key,
+            #            consumer_secret)),
             'imdb': IMDb()
 
                 }
+        if not sources is None:
+            self.apis = {a: self.apis[a] for a in self.apis if a in sources}
+
         # TODO: add option for model experimentation
-        self.tf_vectorizer = CountVectorizer(max_df=0.95, min_df=2,
-                                                stop_words='english')
-        self.model = LatentDirichletAllocation(n_topics=n_topics, max_iter=5,
-                                            learning_method='online',
-                                            learning_offset=50.,
-                                            random_state=0)
         self.max_tweets = max_tweets
         self.max_imdb = max_imdb
         self.sources = sources
+        self.n_topics = n_topics
         #self.vectorizer = TfidfVectorizer()
 
     def filter_sources(self, unwanted_topics):
@@ -46,17 +49,18 @@ class profile_dicts(object):
         for topic_idx, topic in enumerate(model.components_):
             ids.append(topic_idx)
             words.append([feature_names[i]
-                        for i in topic.argsort()[:-no_top_words - 1:-1]])
+                        for i in topic.argsort()[-no_top_words:]])
 
         return pd.DataFrame({'interest': [interest] * len(ids), 'id': ids,
                                                         'topic_words': words})
 
     def display_topics(self, model, interest, feature_names, no_top_words):
-        print ("Interest %s:" % interest)
+        print ("\nInterest %s:" % interest)
         for topic_idx, topic in enumerate(model.components_):
-            print ("Topic %d:" % (topic_idx))
-            print (" ".join([feature_names[i]
-                        for i in topic.argsort()[:-no_top_words - 1:-1]]))
+            message = "Topic #%d: " % topic_idx
+            message += " | ".join([feature_names[i]
+                             for i in topic.argsort()[:-no_top_words - 1:-1]])
+            print(message)
 
     def _fit_imdb(self, interest):
         srs = self.imdb.search_movie(interest)
@@ -76,7 +80,10 @@ class profile_dicts(object):
                     try:
                         synopsis = movie['plot outline'][0]
                     except KeyError:
-                        synopsis = movie['long imdb title']
+                        try:
+                            synopsis = movie['long imdb title']
+                        except:
+                            continue
 
             self.synopses[interest]['synopses'].append(synopsis)
             self.synopses[interest]['imdb_ids'].append(i)
@@ -90,7 +97,7 @@ class profile_dicts(object):
     def _fit_twitter(self, interest):
         try:
             srs = self.twitter.search.tweets(q=interest)
-        except TwitterHTTPError:
+        except:
             return self
 
         for t, r in enumerate(srs):
@@ -124,22 +131,21 @@ class profile_dicts(object):
         # Information retrival and model fitting for each user's interest using
         # available APIs (sources).
         self.unavailable = []
-        for i in interests:
-            self._fit_imdb(i)
-            self._fit_twitter(i)
-            self.documents = self.tweets[i]['texts'] \
-                                + self.synopses[i]['synopses']
+        for interest in interests:
+            tf_vectorizer = TfidfVectorizer(stop_words='english')
+            model = TruncatedSVD(n_components=self.n_topics)
+            self._fit_imdb(interest)
+            self._fit_twitter(interest)
+            self.documents = self.tweets[interest]['texts'] \
+                                + self.synopses[interest]['synopses']
             if self.documents == []:
-                self.unavailable.append(i)
+                self.unavailable.append(interest)
                 continue
 
-            tf = self.tf_vectorizer.fit_transform(self.documents)
-            self.models[i]['f_names'] = self.tf_vectorizer.get_feature_names()
-            self.models[i]['model'] = self.model.fit(tf)
-
-        for i in interests:
-            if i in self.unavailable:
-                del self.models[i]
+            tf = tf_vectorizer.fit_transform(self.documents)
+            self.models[interest]['f_names'] = tf_vectorizer\
+						   .get_feature_names()
+            self.models[interest]['model'] = model.fit(tf)
 
         return self
 
