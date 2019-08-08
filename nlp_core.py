@@ -2,9 +2,15 @@
 import twitter
 from imdb import IMDb
 
+from collections import defaultdict
+from gensim import corpora
+from gensim import models
+from gensim import similarities
+import nltk
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.decomposition import TruncatedSVD
+import pandas as pd
 
 import sys
 sys.path.append(".")
@@ -42,24 +48,27 @@ class profile_dicts(object):
         # 'self.apis'/'self.models[i]['f_names']' according to 'unwanted_topics'
         return self
 
-    def get_topics(self, model, interest, feature_names, no_top_words):
+    def get_topics(self, model, n_top_words, sort_by='difficulty'):
         # TODO: add word weights to the interest dictionary
         ids = []
-        words = []
-        for topic_idx, topic in enumerate(model.components_):
+        topics = []
+        feature_names = model.get_feature_names()
+        for topic_idx, t in enumerate(model.components_):
             ids.append(topic_idx)
-            words.append([feature_names[i]
-                        for i in topic.argsort()[-no_top_words:]])
+            topic = [(feature_names[i], model.idf_[i])
+                                for i in t.argsort()[:-n_top_words - 1:-1]]
+            if sort_by == 'difficulty':
+                topic.sort(key=lambda x: x[1])
+                topics.append(topic)
 
-        return pd.DataFrame({'interest': [interest] * len(ids), 'id': ids,
-                                                        'topic_words': words})
+        return pd.DataFrame({'importance': ids, 'interest_topic': topics})    
 
-    def display_topics(self, model, interest, feature_names, no_top_words):
-        print ("\nInterest %s:" % interest)
+    def display_topics(self, model, n_top_words):
+        
         for topic_idx, topic in enumerate(model.components_):
             message = "Topic #%d: " % topic_idx
             message += " | ".join([feature_names[i]
-                             for i in topic.argsort()[:-no_top_words - 1:-1]])
+                            for i in topic.argsort()[:-n_top_words - 1:-1]])
             print(message)
 
     def _fit_imdb(self, interest):
@@ -100,7 +109,7 @@ class profile_dicts(object):
         except:
             return self
 
-        for t, r in enumerate(srs):
+        for r in srs:
             try:
                 txt = r["text"]
             except KeyError:
@@ -123,11 +132,12 @@ class profile_dicts(object):
         self.imdb = self.apis['imdb']
         self.twitter = self.apis['twitter']
 
-        self.synopses = {i:{'synopses': [], 'imdb_ids': [], 'titles': []}
+        self.synopses = {i: {'synopses': [], 'imdb_ids': [], 'titles': []}
                                                             for i in interests}
         self.tweets = {i: {'texts': [], 'user_ids': [], 'screen_names': []}
                                                             for i in interests}
         self.models = {i: {'model': None, 'f_names': []} for i in interests}
+        self.documents = {}
         # Information retrival and model fitting for each user's interest using
         # available APIs (sources).
         self.unavailable = []
@@ -136,23 +146,46 @@ class profile_dicts(object):
             model = TruncatedSVD(n_components=self.n_topics)
             self._fit_imdb(interest)
             self._fit_twitter(interest)
-            self.documents = self.tweets[interest]['texts'] \
+            self.documents[interest] = self.tweets[interest]['texts'] \
                                 + self.synopses[interest]['synopses']
-            if self.documents == []:
+            if self.documents[interest] == []:
                 self.unavailable.append(interest)
                 continue
 
-            tf = tf_vectorizer.fit_transform(self.documents)
+            tf = tf_vectorizer.fit_transform(self.documents[interest])
             self.models[interest]['f_names'] = tf_vectorizer\
 						   .get_feature_names()
             self.models[interest]['model'] = model.fit(tf)
 
         return self
 
+    def qa_generate(self, interest, n_top_words=5, query=None):
+        preproces = self.models[interest]['model'].build_preprocessor()
+        tokenizer = self.models[interest]['model'].build_tokenizer()
+        sentences = []
+        for d in self.documents[interest]:
+            sentences_str = nltk.sent_tokenize(d)
+            for s in sentences_str:
+                sentences.append(tokenizer(preproces(s)))
+
+        dictionary = corpora.Dictionary(sentences)
+        corpus = [dictionary.doc2bow(s) for s in sentences]
+        lsi = models.LsiModel(corpus, id2word=dictionary, num_topics=n_topics)
+        index = similarities.MatrixSimilarity(lsi[corpus])
+        if query is None:
+            tdf = self.get_topics(self.models[interest]['model'],
+                                    n_top_words=n_top_words, 
+                                    sort_by='difficulty')
+            queries = [[w[0] for w in t]  for t in tdf.interest_topic]
+            vec_bow = dictionary.doc2bow(doc.lower().split())
+
     def get_dict_interests(self, n_top_words=5, mode='get'):
+
+
         for i in list(self.models.keys()):
+            
             if mode == 'display':
-                self.display_topics(self.models[i]['model'], interest=i,
+                self.display_topics(self.models[i]['model'],
                                     feature_names=self.models[i]['f_names'],
                                     no_top_words=n_top_words)
             if mode == 'get':
