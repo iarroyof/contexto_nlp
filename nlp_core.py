@@ -48,23 +48,24 @@ class profile_dicts(object):
         # 'self.apis'/'self.models[i]['f_names']' according to 'unwanted_topics'
         return self
 
-    def get_topics(self, model, n_top_words, sort_by='difficulty'):
+    def get_topics(self, interest, n_top_words, sort_by='difficulty'):
         # TODO: add word weights to the interest dictionary
         ids = []
         topics = []
-        feature_names = model.get_feature_names()
-        for topic_idx, t in enumerate(model.components_):
+        feature_names = self.models[interest]['tfidf'].get_feature_names()
+        for topic_idx, t in enumerate(self.models[interest]['model'] \
+					  .components_):
             ids.append(topic_idx)
-            topic = [(feature_names[i], model.idf_[i])
+            topic = [(feature_names[i], self.models[interest]['tfidf'].idf_[i])
                                 for i in t.argsort()[:-n_top_words - 1:-1]]
             if sort_by == 'difficulty':
                 topic.sort(key=lambda x: x[1])
                 topics.append(topic)
 
-        return pd.DataFrame({'importance': ids, 'interest_topic': topics})    
+        return pd.DataFrame({'importance': ids, 'interest_topic': topics})
 
     def display_topics(self, model, n_top_words):
-        
+
         for topic_idx, topic in enumerate(model.components_):
             message = "Topic #%d: " % topic_idx
             message += " | ".join([feature_names[i]
@@ -153,15 +154,20 @@ class profile_dicts(object):
                 continue
 
             tf = tf_vectorizer.fit_transform(self.documents[interest])
-            self.models[interest]['f_names'] = tf_vectorizer\
-						   .get_feature_names()
+            self.models[interest]['tfidf'] = tf_vectorizer #\
+						   #.get_feature_names()
             self.models[interest]['model'] = model.fit(tf)
 
         return self
 
-    def qa_generate(self, interest, n_top_words=5, query=None):
-        preproces = self.models[interest]['model'].build_preprocessor()
-        tokenizer = self.models[interest]['model'].build_tokenizer()
+    def qa_fit(self, interest, n_top_words=5, n_top_sentences=4,
+                    query_topic_len=3, sort_by='difficulty', query=None):
+        assert query_topic_len < n_top_words
+        preproces = self.models[interest]['tfidf'].build_preprocessor()
+        tokenizer = self.models[interest]['tfidf'].build_tokenizer()
+        idfs = self.models[interest]['tfidf'].idf_
+        vocab = self.models[interest]['tfidf'].vocabulary_
+        feature_names = self.models[interest]['tfidf'].get_feature_names()
         sentences = []
         for d in self.documents[interest]:
             sentences_str = nltk.sent_tokenize(d)
@@ -170,25 +176,53 @@ class profile_dicts(object):
 
         dictionary = corpora.Dictionary(sentences)
         corpus = [dictionary.doc2bow(s) for s in sentences]
-        lsi = models.LsiModel(corpus, id2word=dictionary, num_topics=n_topics)
-        index = similarities.MatrixSimilarity(lsi[corpus])
+        tfidf = models.TfidfModel(corpus)
+        corpus_tfidf = tfidf[corpus]
+        lsi = models.LsiModel(corpus_tfidf, id2word=dictionary,
+						num_topics=self.n_topics)
+        index = similarities.SparseMatrixSimilarity(lsi[corpus],
+                                                  num_features=len(dictionary))
         if query is None:
-            tdf = self.get_topics(self.models[interest]['model'],
-                                    n_top_words=n_top_words, 
-                                    sort_by='difficulty')
-            queries = [[w[0] for w in t]  for t in tdf.interest_topic]
-            vec_bow = dictionary.doc2bow(doc.lower().split())
+            tdf = self.get_topics(interest, sort_by=sort_by,
+                                  n_top_words=n_top_words)
+            topic_queries = [[w[0] for w in t]  for t in tdf.interest_topic]
+            topic_results = []
+            for q in topic_queries:
+                q_bow = dictionary.doc2bow(q[:query_topic_len])
+                q_tfidf = tfidf[q_bow]
+                q_lsi = lsi[q_tfidf]
+                index.num_best = n_top_sentences
+                ranked_sent_ids = index[q_lsi]
+                topic_results.append(
+			[(" ".join(sentences[s]), r, len(sentences[s]))
+                                               for s, r in ranked_sent_ids])
 
-    def get_dict_interests(self, n_top_words=5, mode='get'):
+            answers = [[(w, idfs[vocab[w]]) for w in tokenizer(preproces(r[0]))]
+						for r in self.topic_results]
+            answers.sort(key=lambda x: x[1])
+            qas = pd.DataFrame({
+				'length': [l for _, _, l in self.topic_results],
+                                'simil': [r for _, r, _ in self.topic_results],
+                                'question': [s for s, _, _ in self.topic_results],
+                                'answers': [a[:query_topic_len]
+							for a in answers]
+				})
+            return qas
+        else:
+            q = tokenizer(preproces(query))
+            q_bow = dictionary.doc2bow(q[:query_topic_len])
+            q_tfidf = tfidf[q_bow]
+            q_lsi = lsi[q_tfidf]
+            index.num_best = n_top_sentences
+            ranked_sent_ids = index[query_tfidf]
+            return [(sentences_str[s], r, len(sentences[s]))
+                                               for s, r in ranked_sent_ids]
 
+    def get_user_qa_plan(self, n_top_words=5, n_top_questions=4, query_topic_len=3):
 
+        plan = {}
         for i in list(self.models.keys()):
-            
-            if mode == 'display':
-                self.display_topics(self.models[i]['model'],
-                                    feature_names=self.models[i]['f_names'],
-                                    no_top_words=n_top_words)
-            if mode == 'get':
-                self.get_topics(self.models[i]['model'], interest=i,
-                                feature_names=self.models[i]['f_names'],
-                                                no_top_words=n_top_words)
+            plan[i] = qa_generate(interest=i, n_top_words=n_top_words,
+                                  n_top_sentences=n_top_questions,
+                                  query_topic_len=query_topic_len,
+                                  sort_by='difficulty')
