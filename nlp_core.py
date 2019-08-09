@@ -21,6 +21,7 @@ class profile_dicts(object):
     def __init__(self, sources, ctxt_user, access_token, access_secret,
                     consumer_token, consumer_secret, max_tweets=100, max_imdb=5,
                                                             n_topics=5):
+        # TODO: get API parameters from json file
         self.apis = {
             'twitter': twitter.Api(consumer_key=[consumer_token],
                   consumer_secret=[consumer_secret],
@@ -197,17 +198,21 @@ class profile_dicts(object):
 			[(" ".join(sentences[s]), r, len(sentences[s]))
                                                for s, r in ranked_sent_ids])
 
-            answers = [[(w, idfs[vocab[w]]) for w in tokenizer(preproces(r[0]))]
-						for r in self.topic_results]
-            answers.sort(key=lambda x: x[1])
-            qas = pd.DataFrame({
-				'length': [l for _, _, l in self.topic_results],
-                                'simil': [r for _, r, _ in self.topic_results],
-                                'question': [s for s, _, _ in self.topic_results],
-                                'answers': [a[:query_topic_len]
-							for a in answers]
-				})
-            return qas
+            plain_results = {'topic_rank': [], 'QA': [], 'length': [],
+                             'sim_wrt_topic': [], 'ans': [],}
+            for r, topic in enumerate(topic_results):
+                for qu, sim, l in topic:
+                    plain_results['topic_rank'].append(r)
+                    plain_results['QA'].append(qu)
+                    plain_results['length'].append(l)
+                    plain_results['sim_wrt_topic'].append(sim)
+                    ans = [(w, idfs[vocab[w]])
+                              for w in tokenizer(preproces(qu))
+                                                        if w in vocab]
+                    ans.sort(key=lambda x: x[1])
+                    plain_results['ans'].append(ans)
+
+            return pd.DataFrame(plain_results)
         else:
             q = tokenizer(preproces(query))
             q_bow = dictionary.doc2bow(q[:query_topic_len])
@@ -218,11 +223,16 @@ class profile_dicts(object):
             return [(sentences_str[s], r, len(sentences[s]))
                                                for s, r in ranked_sent_ids]
 
-    def get_user_qa_plan(self, n_top_words=5, n_top_questions=4, query_topic_len=3):
+    def get_user_qa_plan(self, n_top_words=5, n_top_questions=4,
+                         query_topic_len=3, sort_by='length'):
 
-        plan = {}
+        self.plan = {}
         for i in list(self.models.keys()):
-            plan[i] = qa_generate(interest=i, n_top_words=n_top_words,
+            self.plan[i] = self.qa_fit(interest=i, n_top_words=n_top_words,
                                   n_top_sentences=n_top_questions,
                                   query_topic_len=query_topic_len,
                                   sort_by='difficulty')
+            self.plan[i] \
+                .sort_values(by=[sort_by]) \
+                .to_csv('_plain_results_' + '_'.join(i.split())  + '.csv')
+        return self.plan
