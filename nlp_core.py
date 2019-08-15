@@ -236,8 +236,7 @@ class profile_dicts(object):
                                   query_topic_len=query_topic_len,
                                   sort_by='difficulty') \
                                 .sort_values(by=[sort_by])
-            plan[i] \
-                .sort_values(by=[sort_by]) \
-                .to_csv('plain_results_' + '_'.join(i.split())  + '.csv',
+            plan[i].sort_values(by=[sort_by]) \
+                    .to_csv('plain_results_' + '_'.join(i.split())  + '.csv',
                             index=False)
         return plan
