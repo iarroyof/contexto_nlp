@@ -1,6 +1,7 @@
 #from twitter import *
 import twitter
 from imdb import IMDb
+from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
 from collections import defaultdict
 from gensim import corpora
@@ -34,7 +35,7 @@ class profile_dicts(object):
             'imdb': IMDb()
 
                 }
-        if not sources is None:
+        if sources != []:
             self.apis = {a: self.apis[a] for a in self.apis if a in sources}
 
         # TODO: add option for model experimentation
@@ -42,6 +43,7 @@ class profile_dicts(object):
         self.max_imdb = max_imdb
         self.sources = sources
         self.n_topics = n_topics
+        self.analyser = SentimentIntensityAnalyzer()
         #self.vectorizer = TfidfVectorizer()
 
     def filter_sources(self, unwanted_topics):
@@ -210,8 +212,10 @@ class profile_dicts(object):
                               for w in tokenizer(preproces(qu))
                                                         if w in vocab]
                     ans.sort(key=lambda x: x[1])
-                    plain_results['ans'].append(ans)
-
+                    plain_results['ans'].append(ans[:n_top_words])
+            plain_results['sentiment'] = [
+                self.analyser.polarity_scores(sentence)
+                    for sentence in plain_results['QA']]
             return pd.DataFrame(plain_results)
         else:
             q = tokenizer(preproces(query))
@@ -225,14 +229,15 @@ class profile_dicts(object):
 
     def get_user_qa_plan(self, n_top_words=5, n_top_questions=4,
                          query_topic_len=3, sort_by='length'):
-
-        self.plan = {}
+        plan = {}
         for i in list(self.models.keys()):
-            self.plan[i] = self.qa_fit(interest=i, n_top_words=n_top_words,
+            plan[i] = self.qa_fit(interest=i, n_top_words=n_top_words,
                                   n_top_sentences=n_top_questions,
                                   query_topic_len=query_topic_len,
-                                  sort_by='difficulty')
-            self.plan[i] \
+                                  sort_by='difficulty') \
+                                .sort_values(by=[sort_by])
+            plan[i] \
                 .sort_values(by=[sort_by]) \
-                .to_csv('_plain_results_' + '_'.join(i.split())  + '.csv')
-        return self.plan
+                .to_csv('plain_results_' + '_'.join(i.split())  + '.csv',
+                            index=False)
+        return plan
