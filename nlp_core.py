@@ -7,6 +7,7 @@ from collections import defaultdict
 from gensim import corpora
 from gensim import models
 from gensim import similarities
+from gensim.parsing.preprocessing import strip_numeric
 import nltk
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.feature_extraction.text import CountVectorizer
@@ -173,7 +174,7 @@ class profile_dicts(object):
         feature_names = self.models[interest]['tfidf'].get_feature_names()
         sentences = []
         for d in self.documents[interest]:
-            sentences_str = nltk.sent_tokenize(d)
+            sentences_str = nltk.sent_tokenize(strip_numeric(d))
             for s in sentences_str:
                 sentences.append(tokenizer(preproces(s)))
 
@@ -212,7 +213,7 @@ class profile_dicts(object):
                               for w in tokenizer(preproces(qu))
                                                         if w in vocab]
                     ans.sort(key=lambda x: x[1])
-                    plain_results['ans'].append(ans[:n_top_words])
+                    plain_results['answers'].append(ans[:n_top_words])
             plain_results['sentiment'] = [
                 self.analyser.polarity_scores(sentence)
                     for sentence in plain_results['QA']]
