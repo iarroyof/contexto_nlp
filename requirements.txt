@@ -1,0 +1,2 @@
+pip install -U imdbpy config python-twitter nltk gensim scikit-learn vaderSentiment
+python -c "import nltk; nltk.download('punkt')"
