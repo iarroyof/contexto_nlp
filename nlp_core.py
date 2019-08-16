@@ -13,6 +13,9 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.decomposition import TruncatedSVD
 import pandas as pd
+import numpy as np
+import itertools
+from toolz import unique
 
 import sys
 sys.path.append(".")
@@ -51,6 +54,15 @@ class profile_dicts(object):
         # TODO: Remove sources/topics from
         # 'self.apis'/'self.models[i]['f_names']' according to 'unwanted_topics'
         return self
+
+    def unify_samples(self, tokenized):
+        #tokenized = [tokenizer(preprocessor(t)) for t in text_samples]
+        #tokenized.sort()
+
+        #return [" ".join(s)
+        #            for s in list(k for k, _ in itertools.groupby(tokenized))]
+        return list(k for k, _ in itertools.groupby(tokenized))
+        #return [''.join(p) for p in map(list, unique(map(tuple, text_samples)))]
 
     def get_topics(self, interest, n_top_words, sort_by='difficulty'):
         # TODO: add word weights to the interest dictionary
@@ -165,7 +177,8 @@ class profile_dicts(object):
         return self
 
     def qa_fit(self, interest, n_top_words=5, n_top_sentences=4,
-                    query_topic_len=3, sort_by='difficulty', query=None):
+                     min_sentence_length=3, query_topic_len=3,
+                     sort_by='difficulty', query=None):
         assert query_topic_len < n_top_words
         preproces = self.models[interest]['tfidf'].build_preprocessor()
         tokenizer = self.models[interest]['tfidf'].build_tokenizer()
@@ -176,8 +189,10 @@ class profile_dicts(object):
         for d in self.documents[interest]:
             sentences_str = nltk.sent_tokenize(strip_numeric(d))
             for s in sentences_str:
-                sentences.append(tokenizer(preproces(s)))
-
+                tokenized = tokenizer(preproces(s))
+                if len(tokenized) > min_sentence_length:
+                    sentences.append(tokenized)
+        sentences = self.unify_samples(sentences)
         dictionary = corpora.Dictionary(sentences)
         corpus = [dictionary.doc2bow(s) for s in sentences]
         tfidf = models.TfidfModel(corpus)
@@ -202,7 +217,7 @@ class profile_dicts(object):
                                                for s, r in ranked_sent_ids])
 
             plain_results = {'topic_rank': [], 'QA': [], 'length': [],
-                             'sim_wrt_topic': [], 'ans': [],}
+                             'sim_wrt_topic': [], 'answers': [],}
             for r, topic in enumerate(topic_results):
                 for qu, sim, l in topic:
                     plain_results['topic_rank'].append(r)
@@ -228,15 +243,22 @@ class profile_dicts(object):
             return [(sentences_str[s], r, len(sentences[s]))
                                                for s, r in ranked_sent_ids]
 
-    def get_user_qa_plan(self, n_top_words=5, n_top_questions=4,
-                         query_topic_len=3, sort_by='length'):
+    def fit_user_qa_plan(self, n_top_words=5, n_top_questions=4,
+                         query_topic_len=3, sort_by='length',
+                            min_sentence_length=2, save_plan=False):
         plan = {}
         for i in list(self.models.keys()):
-            plan[i] = self.qa_fit(interest=i, n_top_words=n_top_words,
+            self.plan[i] = self.qa_fit(interest=i, n_top_words=n_top_words,
                                   n_top_sentences=n_top_questions,
                                   query_topic_len=query_topic_len,
-                                  sort_by='difficulty') \
+                                  sort_by='difficulty',
+                                  min_sentence_length=min_sentence_length) \
                           .sort_values(by=[sort_by])
-            plan[i].to_csv('plain_results_' + '_'.join(i.split())  + '.csv',
-                            index=False)
-        return plan
+            if save_plan:
+                self.plan[i].to_csv('plain_results_' \
+                                        + '_'.join(i.split()) + '.csv',
+                                    index=False)
+        return self
+
+    def pose_qa(self):
+        
