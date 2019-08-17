@@ -225,10 +225,11 @@ class profile_dicts(object):
                     plain_results['length'].append(l)
                     plain_results['sim_wrt_topic'].append(sim)
                     ans = [(w, idfs[vocab[w]])
-                              for w in tokenizer(preproces(qu))
+                              for w in set(tokenizer(preproces(qu)))
                                                         if w in vocab]
                     ans.sort(key=lambda x: x[1])
-                    plain_results['answers'].append(ans[:n_top_words])
+                    plain_results['answers'].append(ans[:min(n_top_words,
+                                                             len(ans))])
             plain_results['sentiment'] = [
                 self.analyser.polarity_scores(sentence)
                     for sentence in plain_results['QA']]
@@ -246,7 +247,7 @@ class profile_dicts(object):
     def fit_user_qa_plan(self, n_top_words=5, n_top_questions=4,
                          query_topic_len=3, sort_by='length',
                             min_sentence_length=2, save_plan=False):
-        plan = {}
+        self.plan = {}
         for i in list(self.models.keys()):
             self.plan[i] = self.qa_fit(interest=i, n_top_words=n_top_words,
                                   n_top_sentences=n_top_questions,
@@ -260,5 +261,5 @@ class profile_dicts(object):
                                     index=False)
         return self
 
-    def pose_qa(self):
-        
+# TODO:    def pose_qa(self):
+
