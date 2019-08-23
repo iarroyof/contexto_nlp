@@ -342,9 +342,7 @@ class profile_dicts(object):
                             q = que.replace(a[0], '_' * len(a[0]))
                             tans = list(map(tuple, ans))
                             tans.pop(tans.index(correct))
-                            posed_qas.append(
-                                (q, correct, tans)
-                            )
+                            posed_qas.append((q, correct, tans))
                 if save_posed:
                     pd.DataFrame(posed_qas,
                                 columns=['question', 'answer', 'bait']) \
