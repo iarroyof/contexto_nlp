@@ -44,5 +44,9 @@ Out[5]:
 5                             [(spar, 2.09861228867)]       3   
 1   [(neo, 1.40546510811), (laughs, 2.09861228867)...       5
 ...
+# Now you can get explicit questions and answers with difficulty 1 (0-3):
+In [6]: up.pose_qa(save_posed=False, difficulty_sector=1, save_posed=True)
+
+# See the corresponding qa_for_*.csv files
 
 ```
