@@ -330,7 +330,7 @@ class profile_dicts(object):
                                 columns=['question', 'answer', 'bait'])
         else:
             plan_qas = {}
-            for i in self.qa_plan:
+            for i in list(self.qa_plan.keys()):
                 ques = self.qa_plan[i]['QA'][ques_idx]
                 anss = [test_ans_length(a, anss_idx)
                                 for a in self.qa_plan[i]['answers'][ques_idx]]
@@ -353,6 +353,6 @@ class profile_dicts(object):
                 else:
                     plan_qas[i] = pd.DataFrame(posed_qas,
                                         columns=['question', 'answer', 'bait'])
-                return plan_qas
+            return plan_qas
 
 
