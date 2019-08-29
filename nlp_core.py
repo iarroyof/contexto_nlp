@@ -28,7 +28,7 @@ import config
 class profile_dicts(object):
     def __init__(self, sources, ctxt_user, access_token, access_secret,
                     consumer_token, consumer_secret, max_tweets=100, max_imdb=5,
-                    n_top_sentences=5, n_top_words=5, n_topics=5):
+                    n_top_sentences=5, n_top_words=10, n_topics=5):
         # TODO: get API parameters from json file
         self.apis = {
             'twitter': twitter.Api(consumer_key=[consumer_token],
@@ -53,7 +53,8 @@ class profile_dicts(object):
         self.n_top_sentences = n_top_sentences
         self.n_top_words = n_top_words
         self.analyser = SentimentIntensityAnalyzer()
-        #self.vectorizer = TfidfVectorizer()
+        self.bow_vocab = {}
+        self.interest_bower = {}
 
     def filter_sources(self, unwanted_topics):
         # TODO: Remove sources/topics from
@@ -70,7 +71,7 @@ class profile_dicts(object):
         #return [''.join(p) for p in map(list, unique(map(tuple, text_samples)))]
 
     def get_topics(self, interest, #n_top_words, 
-                            sort_by='difficulty'):
+                            sort_by='specificity'):
         # TODO: add word weights to the interest dictionary
         ids = []
         topics = []
@@ -80,7 +81,7 @@ class profile_dicts(object):
             ids.append(topic_idx)
             topic = [(feature_names[i], self.models[interest]['tfidf'].idf_[i])
                                 for i in t.argsort()[:-self.n_top_words - 1:-1]]
-            if sort_by == 'difficulty':
+            if sort_by == 'specificity':
                 topic.sort(key=lambda x: x[1])
                 topics.append(topic)
 
@@ -154,13 +155,13 @@ class profile_dicts(object):
     def fit(self, interests):
         self.imdb = self.apis['imdb']
         self.twitter = self.apis['twitter']
-
         self.synopses = {i: {'synopses': [], 'imdb_ids': [], 'titles': []}
                                                             for i in interests}
         self.tweets = {i: {'texts': [], 'user_ids': [], 'screen_names': []}
                                                             for i in interests}
         self.models = {i: {'model': None, 'f_names': []} for i in interests}
         self.documents = {}
+        self.int_sentences = {}
         # Information retrival and model fitting for each user's interest using
         # available APIs (sources).
         self.unavailable = []
@@ -176,15 +177,13 @@ class profile_dicts(object):
                 continue
 
             tf = tf_vectorizer.fit_transform(self.documents[interest])
-            self.models[interest]['tfidf'] = tf_vectorizer #\
-						   #.get_feature_names()
+            self.models[interest]['tfidf'] = tf_vectorizer
             self.models[interest]['model'] = model.fit(tf)
 
         return self
 
-    def qa_fit(self, interest, #n_top_words=5, #n_top_sentences=4,
-                     min_sentence_length=3, query_topic_len=3,
-                     sort_by='difficulty', query=None):
+    def qa_fit(self, interest, min_sentence_length=3, query_topic_len=3,
+                     sort_by='specificity', query=None):
         assert query_topic_len < self.n_top_words
         preproces = self.models[interest]['tfidf'].build_preprocessor()
         tokenizer = self.models[interest]['tfidf'].build_tokenizer()
@@ -192,6 +191,7 @@ class profile_dicts(object):
         vocab = self.models[interest]['tfidf'].vocabulary_
         feature_names = self.models[interest]['tfidf'].get_feature_names()
         sentences = []
+        
         for d in self.documents[interest]:
             sentences_str = nltk.sent_tokenize(strip_numeric(d))
             for s in sentences_str:
@@ -199,6 +199,7 @@ class profile_dicts(object):
                 if len(tokenized) > min_sentence_length:
                     sentences.append(tokenized)
         sentences = self.unify_samples(sentences)
+        self.int_sentences[interest] = sentences
         dictionary = corpora.Dictionary(sentences)
         corpus = [dictionary.doc2bow(s) for s in sentences]
         tfidf = models.TfidfModel(corpus)
@@ -207,9 +208,10 @@ class profile_dicts(object):
 						num_topics=self.n_topics)
         index = similarities.SparseMatrixSimilarity(lsi[corpus],
                                                   num_features=len(dictionary))
+        self.interest_bower[interest] = dictionary
+        
         if query is None:
-            tdf = self.get_topics(interest, sort_by=sort_by) #,
-                                  #n_top_words=n_top_words)
+            tdf = self.get_topics(interest, sort_by=sort_by)
             topic_queries = [[w[0] for w in t]  for t in tdf.interest_topic]
             topic_results = []
             for q in topic_queries:
@@ -239,6 +241,7 @@ class profile_dicts(object):
             plain_results['sentiment'] = [
                 self.analyser.polarity_scores(sentence)
                     for sentence in plain_results['QA']]
+            
             return pd.DataFrame(plain_results)
         else:
             q = tokenizer(preproces(query))
@@ -247,38 +250,37 @@ class profile_dicts(object):
             q_lsi = lsi[q_tfidf]
             index.num_best = self.n_top_sentences
             ranked_sent_ids = index[query_tfidf]
+            
             return [(sentences_str[s], r, len(sentences[s]))
                                                for s, r in ranked_sent_ids]
 
-    def fit_user_qa_plan(self, #n_top_words=5, #n_top_questions=4,
-                         query_topic_len=3, sort_by='length',
+    def fit_user_qa_plan(self, query_topic_len=3, sort_by='length',
                             min_sentence_length=2, save_plan=False):
         self.qa_plan = {}
         for i in list(self.models.keys()):
-            self.qa_plan[i] = self.qa_fit(interest=i, #n_top_words=n_top_words,
-                                  #n_top_sentences=n_top_questions,
-                                  query_topic_len=query_topic_len,
-                                  sort_by='difficulty',
-                                  min_sentence_length=min_sentence_length) \
-                          .sort_values(by=[sort_by])
+            self.qa_plan[i] = self.qa_fit(interest=i,
+                                    query_topic_len=query_topic_len,
+                                    sort_by='specificity',
+                                    min_sentence_length=min_sentence_length) \
+                                  .sort_values(by=[sort_by])
             if save_plan:
                 self.qa_plan[i].to_csv('plain_results_' \
-                                        + '_'.join(i.split()) + '.csv',
-                                    index=False)
+                                            + '_'.join(i.split()) + '.csv',
+                                       index=False)
         return self
 
-    def pose_qa(self, difficulty_sector=0, n_qas=4, n_diff_sectors=3,
+    def pose_qa(self, specificity_sector=0, n_qas=4, n_diff_sectors=3,
                     n_incorrect = 3, plan_file=None, save_posed=True):
         """
         # This method poses random questions and answers according to given
-        # difficulty sector. The input where the qas are drawn from is the
+        # specificity sector. The input where the qas are drawn from is the
         # previously generated 'qa_plan', the output of the 'fit_user_qa_plan()'
         # method.
         # The returned value of this method is a dataframe, which can be
         # converted to any convenient format. E.g.:
         
         qadf = up.pose_qa(plan_file='plain_results_the_matrix.csv', 
-                                                        difficulty_sector=1)
+                                                        specificity_sector=1)
         
         """
         def test_ans_length(ans, indexes):
@@ -288,14 +290,14 @@ class profile_dicts(object):
             else:
                 return np.array(ans)
 
-        assert difficulty_sector < n_diff_sectors, ('The difficulty sector goes'
-            ' from 0 to {}'.format(n_diff_sectors - 1))
+        assert specificity_sector < n_diff_sectors, ('The specificity sector'
+                                ' goes from 0 to {}'.format(n_diff_sectors - 1))
         diff_sector_means = list(map(np.mean, 
                                     np.array_split(
                                         np.array(
                                             list(range(10))) / 10.0,
                                         n_diff_sectors)))
-        bn_parameter = diff_sector_means[difficulty_sector]
+        bn_parameter = diff_sector_means[specificity_sector]
         q_size = self.n_topics * self.n_top_sentences
         a_size = self.n_top_words
         ques_idx = np.random.binomial(n=q_size, p=bn_parameter, size=n_qas)
@@ -334,6 +336,9 @@ class profile_dicts(object):
                 ques = self.qa_plan[i]['QA'][ques_idx]
                 anss = [test_ans_length(a, anss_idx)
                                 for a in self.qa_plan[i]['answers'][ques_idx]]
+                #q_tokenized = ' '.join(self.qa_plan[i]['QA'].values.tolist())
+                int_bow = dict(self.interest_bower[i] \
+                                    .doc2bow(sum(self.int_sentences[i], [])))
                 posed_qas = []
                 for que, ans in zip(ques, anss):
                     if len(ans) >= n_incorrect:
@@ -342,11 +347,15 @@ class profile_dicts(object):
                             q = que.replace(a[0], '_' * len(a[0]))
                             tans = list(map(tuple, ans))
                             tans.pop(tans.index(correct))
+                            correct_id = self.interest_bower[i] \
+                                             .token2id[correct[0]]
+                            correct = correct + (int_bow[correct_id], )
                             posed_qas.append((q, correct, tans))
+
                 if save_posed:
                     pd.DataFrame(posed_qas,
                                 columns=['question', 'answer', 'bait']) \
-                      .to_csv('qa_for_' + '_'.join(i.split()) + '.csv',
+                      .to_csv('qa_for_' + i.replace(' ', '_') + '.csv',
                               index=False)
                 else:
                     plan_qas[i] = pd.DataFrame(posed_qas,
